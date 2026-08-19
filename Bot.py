@@ -33,6 +33,8 @@ active_sessions = {}
 # ----------------- DATABASE -----------------
 conn = sqlite3.connect("batch_files.db", check_same_thread=False)
 cursor = conn.cursor()
+
+# Files table
 cursor.execute("""
     CREATE TABLE IF NOT EXISTS files (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -42,9 +44,62 @@ cursor.execute("""
         caption TEXT
     )
 """)
+
+# Users table for broadcast
+cursor.execute("""
+    CREATE TABLE IF NOT EXISTS users (
+        user_id INTEGER PRIMARY KEY
+    )
+""")
 conn.commit()
 
-# ----------------- 1. START UPLOAD MODE -----------------
+def add_user(user_id):
+    try:
+        cursor.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (user_id,))
+        conn.commit()
+    except Exception as e:
+        print(f"Error saving user: {e}")
+
+# ----------------- 1. BROADCAST COMMAND -----------------
+@bot.message_handler(commands=['broadcast'])
+def broadcast_command(message):
+    if message.from_user.id != ADMIN_ID:
+        return
+
+    text = message.text.replace("/broadcast", "").strip()
+    if not text:
+        bot.reply_to(message, "⚠️ *Usage:* `/broadcast Aapka message yahan`", parse_mode="Markdown")
+        return
+
+    cursor.execute("SELECT user_id FROM users")
+    users = cursor.fetchall()
+
+    if not users:
+        bot.reply_to(message, "❌ Database me koi user save nahi hai.")
+        return
+
+    sent_count = 0
+    failed_count = 0
+
+    status_msg = bot.reply_to(message, f"⏳ Broadcast bhejna shuru kar raha hu to {len(users)} users...")
+
+    for (u_id,) in users:
+        try:
+            bot.send_message(u_id, text)
+            sent_count += 1
+        except Exception:
+            failed_count += 1
+
+    bot.edit_message_text(
+        f"✅ *Broadcast Completed!*\n\n"
+        f"📤 *Sent:* {sent_count}\n"
+        f"❌ *Failed / Blocked:* {failed_count}",
+        chat_id=message.chat.id,
+        message_id=status_msg.message_id,
+        parse_mode="Markdown"
+    )
+
+# ----------------- 2. START UPLOAD MODE -----------------
 @bot.message_handler(commands=['upload'])
 def start_upload(message):
     if message.from_user.id != ADMIN_ID:
@@ -60,13 +115,13 @@ def start_upload(message):
     bot.reply_to(
         message, 
         f"✅ *Upload Mode Started!*\nBatch ID: `{batch_id}`\n\n"
-        "👉 Ab aap ek-ek karke ya ek sath saari photos/videos/files bhejte rahein.\n"
+        "👉 Ab aap photos/videos/files bhejte rahein.\n"
         "👉 Upload khatam hone ke baad neeche **'🏁 Finish Upload'** button dabayein.", 
         parse_mode="Markdown", 
         reply_markup=markup
     )
 
-# ----------------- 2. RECEIVE MEDIA FILES -----------------
+# ----------------- 3. RECEIVE MEDIA FILES -----------------
 @bot.message_handler(content_types=['photo', 'video', 'document', 'audio'])
 def handle_files(message):
     admin_id = message.from_user.id
@@ -99,7 +154,7 @@ def handle_files(message):
     
     bot.reply_to(message, f"📥 File #{total_saved} Saved! Aur bhejte rahein ya neeche **'🏁 Finish Upload'** dabayein.", parse_mode="Markdown")
 
-# ----------------- 3. FINISH UPLOAD HANDLER -----------------
+# ----------------- 4. FINISH UPLOAD HANDLER -----------------
 @bot.message_handler(func=lambda msg: msg.text == "🏁 Finish Upload" or msg.text == "/finish")
 def finish_upload_action(message):
     admin_id = message.from_user.id
@@ -112,8 +167,6 @@ def finish_upload_action(message):
     total_files = session_data["count"]
     
     share_url = f"https://t.me/{BOT_USERNAME}?start={batch_id}"
-    
-    # Keyboard hatane ke liye RemoveKeyboard
     remove_markup = types.ReplyKeyboardRemove()
     
     response_text = (
@@ -125,9 +178,12 @@ def finish_upload_action(message):
     
     bot.send_message(message.chat.id, response_text, parse_mode="Markdown", reply_markup=remove_markup)
 
-# ----------------- 4. USER /START LINK HANDLER -----------------
+# ----------------- 5. USER /START LINK HANDLER -----------------
 @bot.message_handler(commands=['start'])
 def handle_start(message):
+    # Save user for broadcast
+    add_user(message.chat.id)
+
     parts = message.text.split()
     if len(parts) > 1:
         batch_id = parts[1]
@@ -153,7 +209,7 @@ def handle_start(message):
                 print(f"Error sending file: {e}")
     else:
         if message.from_user.id == ADMIN_ID:
-            bot.reply_to(message, "👋 Welcome Admin! `/upload` bhej kar batch upload shuru karein.", parse_mode="Markdown")
+            bot.reply_to(message, "👋 Welcome Admin!\n\n• `/upload` - Batch upload start karein\n• `/broadcast <text>` - Sabhi users ko message bhejein", parse_mode="Markdown")
         else:
             bot.reply_to(message, "👋 Welcome! Files access karne ke liye valid link par click karein.")
 
